@@ -141,6 +141,18 @@ When starting a fresh aider session, you can include recent git history in the c
 
 Remember, the chat history already includes recent changes made during the current session, so this tip is most useful when starting a new aider session and you want to provide context about recent work.
 
+You can also use aider to review PR branches:
+
+```
+/run git diff one-branch..another-branch
+
+...
+
+Add 6.9k tokens of command output to the chat? (Y)es/(N)o [Yes]: Yes
+
+/ask Are there any problems with the way this change works with the FooBar class?
+```
+
 {: .tip }
 The `/git` command will not work for this purpose, as its output is not included in the chat. 
 
@@ -237,13 +249,15 @@ tr:hover { background-color: #f5f5f5; }
 </style>
 <table>
 <tr><th>Model Name</th><th class='right'>Total Tokens</th><th class='right'>Percent</th></tr>
-<tr><td>claude-3-5-sonnet-20241022</td><td class='right'>1,668,599</td><td class='right'>87.5%</td></tr>
-<tr><td>o1-preview</td><td class='right'>117,312</td><td class='right'>6.2%</td></tr>
-<tr><td>gemini/REDACTED</td><td class='right'>82,572</td><td class='right'>4.3%</td></tr>
-<tr><td>deepseek/deepseek-coder</td><td class='right'>24,628</td><td class='right'>1.3%</td></tr>
-<tr><td>gpt-4o</td><td class='right'>9,243</td><td class='right'>0.5%</td></tr>
-<tr><td>gpt-4o-mini</td><td class='right'>3,420</td><td class='right'>0.2%</td></tr>
-<tr><td>mistral/REDACTED</td><td class='right'>620</td><td class='right'>0.0%</td></tr>
+<tr><td>deepseek/deepseek-chat</td><td class='right'>1,272,856</td><td class='right'>52.9%</td></tr>
+<tr><td>claude-3-5-sonnet-20241022</td><td class='right'>769,815</td><td class='right'>32.0%</td></tr>
+<tr><td>deepseek/REDACTED</td><td class='right'>308,841</td><td class='right'>12.8%</td></tr>
+<tr><td>o1</td><td class='right'>25,121</td><td class='right'>1.0%</td></tr>
+<tr><td>claude-3-5-haiku-20241022</td><td class='right'>10,083</td><td class='right'>0.4%</td></tr>
+<tr><td>gemini/gemini-exp-1206</td><td class='right'>10,068</td><td class='right'>0.4%</td></tr>
+<tr><td>mistral/codestral-latest</td><td class='right'>8,137</td><td class='right'>0.3%</td></tr>
+<tr><td>gpt-4o</td><td class='right'>1,775</td><td class='right'>0.1%</td></tr>
+<tr><td>o1-preview</td><td class='right'>175</td><td class='right'>0.0%</td></tr>
 </table>
 
 {: .note :}
@@ -260,6 +274,31 @@ The
 by doing something like `git blame` on the repo,
 and counting up who wrote all the new lines of code in each release.
 Only lines in source code files are counted, not documentation or prompt files.
+
+## Why does aider sometimes stop highlighting code in its replies?
+
+Aider displays the markdown responses that are coming back from the LLM.
+Usually, the LLM will reply with code in a markdown "code block" with
+triple backtick fences, like this:
+
+````
+Here's some code:
+
+```
+print("hello")
+```
+````
+
+But if you've added files to the chat that contain triple backticks,
+aider needs to tell the LLM to use a different set of fences.
+Otherwise, the LLM can't safely include your code's triple backticks
+inside the code blocks that it returns with edits.
+Aider will use fences like `<source>...</source>` in this case.
+
+A side effect of this is that the code that aider outputs may no
+longer be properly highlighted.
+You will most often notice this if you add markdown files
+to you chats that contain code blocks.
 
 ## Why is the LLM speaking to me in an unexpected language?
 

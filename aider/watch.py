@@ -66,10 +66,10 @@ class FileWatcher:
     # Compiled regex pattern for AI comments
     ai_comment_pattern = re.compile(r"(?:#|//|--) *(ai\b.*|ai\b.*|.*\bai[?!]?) *$", re.IGNORECASE)
 
-    def __init__(self, coder, gitignores=None, verbose=False, analytics=None):
+    def __init__(self, coder, gitignores=None, verbose=False, analytics=None, root=None):
         self.coder = coder
         self.io = coder.io
-        self.root = Path(coder.root)
+        self.root = Path(root) if root else Path(coder.root)
         self.verbose = verbose
         self.analytics = analytics
         self.stop_event = None
@@ -223,6 +223,9 @@ class FileWatcher:
         comments = []
         has_action = None  # None, "!" or "?"
         content = self.io.read_text(filepath, silent=True)
+        if not content:
+            return None, None, None
+
         for i, line in enumerate(content.splitlines(), 1):
             if match := self.ai_comment_pattern.search(line):
                 comment = match.group(0).strip()
