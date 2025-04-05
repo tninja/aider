@@ -13,29 +13,52 @@ Model aliases allow you to create shorthand names for models you frequently use.
 You can define aliases when launching aider using the `--alias` option:
 
 ```bash
-aider --alias "fast:gpt-3.5-turbo" --alias "smart:gpt-4"
+aider --alias "fast:gpt-4o-mini" --alias "smart:o3-mini"
 ```
 
 Multiple aliases can be defined by using the `--alias` option multiple times. Each alias definition should be in the format `alias:model-name`.
 
 ## Configuration File
 
-You can also define aliases in your [`.aider.conf.yml` file](https://aider.chat/docs/config/aider_conf.html):
+Of course,
+you can also define aliases in your [`.aider.conf.yml` file](https://aider.chat/docs/config/aider_conf.html):
 
 ```yaml
 alias:
-  - "fast:gpt-3.5-turbo"
-  - "smart:gpt-4"
+  - "fast:gpt-4o-mini"
+  - "smart:o3-mini"
   - "hacker:claude-3-sonnet-20240229"
 ```
 
 ## Using Aliases
 
-Once defined, you can use the alias instead of the full model name:
+Once defined, you can use the alias instead of the full model name from the command line:
 
 ```bash
-aider --model fast  # Uses gpt-3.5-turbo
-aider --model smart  # Uses gpt-4
+aider --model fast  # Uses gpt-4o-mini
+aider --model smart  # Uses o3-mini
+```
+
+Or with the `/model` command in-chat:
+
+```
+Aider v0.75.3
+Main model: anthropic/claude-3-7-sonnet-20250219 with diff edit format, prompt cache, infinite output
+Weak model: claude-3-5-sonnet-20241022
+Git repo: .git with 406 files
+Repo-map: using 4096 tokens, files refresh
+─────────────────────────────────────────────────────────────────────────────────────────────────────
+> /model fast
+
+Aider v0.75.3
+Main model: gpt-4o-mini with diff edit format
+─────────────────────────────────────────────────────────────────────────────────────────────────────
+diff> /model smart
+
+Aider v0.75.3
+Main model: o3-mini with diff edit format
+─────────────────────────────────────────────────────────────────────────────────────────────────────
+>
 ```
 
 ## Built-in Aliases
@@ -57,10 +80,14 @@ for alias, model in sorted(MODEL_ALIASES.items()):
 - `4o`: gpt-4o
 - `deepseek`: deepseek/deepseek-chat
 - `flash`: gemini/gemini-2.0-flash-exp
+- `gemini`: gemini/gemini-2.5-pro-preview-03-25
+- `gemini-2.5-pro`: gemini/gemini-2.5-pro-exp-03-25
+- `gemini-exp`: gemini/gemini-2.5-pro-exp-03-25
 - `haiku`: claude-3-5-haiku-20241022
 - `opus`: claude-3-opus-20240229
+- `quasar`: openrouter/openrouter/quasar-alpha
 - `r1`: deepseek/deepseek-reasoner
-- `sonnet`: claude-3-5-sonnet-20241022
+- `sonnet`: anthropic/claude-3-7-sonnet-20250219
 <!--[[[end]]]-->
 
 ## Priority

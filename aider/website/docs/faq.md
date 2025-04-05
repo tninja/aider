@@ -153,6 +153,21 @@ Add 6.9k tokens of command output to the chat? (Y)es/(N)o [Yes]: Yes
 /ask Are there any problems with the way this change works with the FooBar class?
 ```
 
+And of course you can prepare diff output outside of aider and provide it as
+a file for aider to read:
+
+```
+$ git diff -C10 v1..v2 > v1-v2-changes.diff
+$ aider --read v1-v2-changes.diff
+
+Aider v0.77.2.dev+import
+Main model: anthropic/claude-3-7-sonnet-20250219 with diff edit format, 8k think tokens
+──────────────────────────────────
+v1-v2-changes.diff
+> Do you see any potential bugs in this PR?
+```
+
+
 {: .tip }
 The `/git` command will not work for this purpose, as its output is not included in the chat. 
 
@@ -249,15 +264,12 @@ tr:hover { background-color: #f5f5f5; }
 </style>
 <table>
 <tr><th>Model Name</th><th class='right'>Total Tokens</th><th class='right'>Percent</th></tr>
-<tr><td>deepseek/deepseek-chat</td><td class='right'>1,272,856</td><td class='right'>52.9%</td></tr>
-<tr><td>claude-3-5-sonnet-20241022</td><td class='right'>769,815</td><td class='right'>32.0%</td></tr>
-<tr><td>deepseek/REDACTED</td><td class='right'>308,841</td><td class='right'>12.8%</td></tr>
-<tr><td>o1</td><td class='right'>25,121</td><td class='right'>1.0%</td></tr>
-<tr><td>claude-3-5-haiku-20241022</td><td class='right'>10,083</td><td class='right'>0.4%</td></tr>
-<tr><td>gemini/gemini-exp-1206</td><td class='right'>10,068</td><td class='right'>0.4%</td></tr>
-<tr><td>mistral/codestral-latest</td><td class='right'>8,137</td><td class='right'>0.3%</td></tr>
-<tr><td>gpt-4o</td><td class='right'>1,775</td><td class='right'>0.1%</td></tr>
-<tr><td>o1-preview</td><td class='right'>175</td><td class='right'>0.0%</td></tr>
+<tr><td>gemini/gemini-2.5-pro-exp-03-25</td><td class='right'>788,594</td><td class='right'>92.0%</td></tr>
+<tr><td>openrouter/openrouter/quasar-alpha</td><td class='right'>36,847</td><td class='right'>4.3%</td></tr>
+<tr><td>gemini/gemini-2.5-pro-preview-03-25</td><td class='right'>16,646</td><td class='right'>1.9%</td></tr>
+<tr><td>openrouter/deepseek/deepseek-chat-v3-0324:free</td><td class='right'>11,324</td><td class='right'>1.3%</td></tr>
+<tr><td>openrouter/REDACTED</td><td class='right'>1,755</td><td class='right'>0.2%</td></tr>
+<tr><td>vertex_ai/REDACTED</td><td class='right'>1,739</td><td class='right'>0.2%</td></tr>
 </table>
 
 {: .note :}

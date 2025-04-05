@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from aider.dump import dump  # noqa: F401
+
 
 @dataclass
 class ExInfo:
@@ -50,6 +52,7 @@ EXCEPTIONS = [
 
 class LiteLLMExceptions:
     exceptions = dict()
+    exception_info = {exi.name: exi for exi in EXCEPTIONS}
 
     def __init__(self):
         self._load()
@@ -58,20 +61,13 @@ class LiteLLMExceptions:
         import litellm
 
         for var in dir(litellm):
-            if not var.endswith("Error"):
-                continue
+            if var.endswith("Error"):
+                if var not in self.exception_info:
+                    raise ValueError(f"{var} is in litellm but not in aider's exceptions list")
 
-            ex_info = None
-            for exi in EXCEPTIONS:
-                if var == exi.name:
-                    ex_info = exi
-                    break
-
-            if strict and not ex_info:
-                raise ValueError(f"{var} is in litellm but not in aider's exceptions list")
-
+        for var in self.exception_info:
             ex = getattr(litellm, var)
-            self.exceptions[ex] = ex_info
+            self.exceptions[ex] = self.exception_info[var]
 
     def exceptions_tuple(self):
         return tuple(self.exceptions)
@@ -87,4 +83,25 @@ class LiteLLMExceptions:
                 )
             if "boto3" in str(ex):
                 return ExInfo("APIConnectionError", False, "You need to: pip install boto3")
+            if "OpenrouterException" in str(ex) and "'choices'" in str(ex):
+                return ExInfo(
+                    "APIConnectionError",
+                    True,
+                    (
+                        "OpenRouter or the upstream API provider is down, overloaded or rate"
+                        " limiting your requests."
+                    ),
+                )
+
+        # Check for specific non-retryable APIError cases like insufficient credits
+        if ex.__class__ is litellm.APIError:
+            err_str = str(ex).lower()
+            if "insufficient credits" in err_str and '"code":402' in err_str:
+                return ExInfo(
+                    "APIError",
+                    False,
+                    "Insufficient credits with the API provider. Please add credits.",
+                )
+            # Fall through to default APIError handling if not the specific credits error
+
         return self.exceptions.get(ex.__class__, ExInfo(None, None, None))

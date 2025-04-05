@@ -1,7 +1,18 @@
 from pathlib import Path
 
+from aider.dump import dump  # noqa
 from aider.io import InputOutput
 from aider.watch import FileWatcher
+
+
+class MinimalCoder:
+    def __init__(self, io):
+        self.io = io
+        self.root = "."
+        self.abs_fnames = set()
+
+    def get_rel_fname(self, fname):
+        return fname
 
 
 def test_gitignore_patterns():
@@ -61,17 +72,48 @@ def test_gitignore_patterns():
     tmp_gitignore.unlink()
 
 
+def test_get_roots_to_watch(tmp_path):
+    # Create a test directory structure
+    (tmp_path / "included").mkdir()
+    (tmp_path / "excluded").mkdir()
+
+    io = InputOutput(pretty=False, fancy_input=False, yes=False)
+    coder = MinimalCoder(io)
+
+    # Test with no gitignore
+    watcher = FileWatcher(coder, root=tmp_path)
+    roots = watcher.get_roots_to_watch()
+    assert len(roots) == 1
+    assert roots[0] == str(tmp_path)
+
+    # Test with gitignore
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text("excluded/")
+    watcher = FileWatcher(coder, root=tmp_path, gitignores=[gitignore])
+    roots = watcher.get_roots_to_watch()
+    assert len(roots) == 2
+    assert Path(sorted(roots)[0]).name == ".gitignore"
+    assert Path(sorted(roots)[1]).name == "included"
+
+
+def test_handle_changes():
+    io = InputOutput(pretty=False, fancy_input=False, yes=False)
+    coder = MinimalCoder(io)
+    watcher = FileWatcher(coder)
+
+    # Test no changes
+    assert not watcher.handle_changes([])
+    assert len(watcher.changed_files) == 0
+
+    # Test with changes
+    changes = [("modified", "/path/to/file.py")]
+    assert watcher.handle_changes(changes)
+    assert len(watcher.changed_files) == 1
+    assert str(Path("/path/to/file.py")) in watcher.changed_files
+
+
 def test_ai_comment_pattern():
     # Create minimal IO and Coder instances for testing
-    class MinimalCoder:
-        def __init__(self, io):
-            self.io = io
-            self.root = "."
-            self.abs_fnames = set()
-
-        def get_rel_fname(self, fname):
-            return fname
-
     io = InputOutput(pretty=False, fancy_input=False, yes=False)
     coder = MinimalCoder(io)
     watcher = FileWatcher(coder)
@@ -113,3 +155,12 @@ def test_ai_comment_pattern():
     assert (
         question_js_has_bang == "?"
     ), "Expected at least one bang (!) comment in watch_question.js fixture"
+    
+    # Test Lisp fixture
+    lisp_path = fixtures_dir / "watch.lisp"
+    lisp_lines, lisp_comments, lisp_has_bang = watcher.get_ai_comments(str(lisp_path))
+    lisp_expected = 7
+    assert (
+        len(lisp_lines) == lisp_expected
+    ), f"Expected {lisp_expected} AI comments in Lisp fixture, found {len(lisp_lines)}"
+    assert lisp_has_bang == "!", "Expected at least one bang (!) comment in Lisp fixture"

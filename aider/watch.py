@@ -64,7 +64,7 @@ class FileWatcher:
     """Watches source files for changes and AI comments"""
 
     # Compiled regex pattern for AI comments
-    ai_comment_pattern = re.compile(r"(?:#|//|--) *(ai\b.*|ai\b.*|.*\bai[?!]?) *$", re.IGNORECASE)
+    ai_comment_pattern = re.compile(r"(?:#|//|--|;+) *(ai\b.*|ai\b.*|.*\bai[?!]?) *$", re.IGNORECASE)
 
     def __init__(self, coder, gitignores=None, verbose=False, analytics=None, root=None):
         self.coder = coder
@@ -95,7 +95,9 @@ class FileWatcher:
         if self.verbose:
             dump(rel_path)
 
-        if self.gitignore_spec and self.gitignore_spec.match_file(str(rel_path)):
+        if self.gitignore_spec and self.gitignore_spec.match_file(
+            rel_path.as_posix() + ("/" if path_abs.is_dir() else "")
+        ):
             return False
 
         if self.verbose:
@@ -108,28 +110,55 @@ class FileWatcher:
         except Exception:
             return
 
+    def get_roots_to_watch(self):
+        """Determine which root paths to watch based on gitignore rules"""
+        if self.gitignore_spec:
+            roots = [
+                str(path)
+                for path in self.root.iterdir()
+                if not self.gitignore_spec.match_file(
+                    path.relative_to(self.root).as_posix() + ("/" if path.is_dir() else "")
+                )
+            ]
+            # Fallback to watching root if all top-level items are filtered out
+            return roots if roots else [str(self.root)]
+        return [str(self.root)]
+
+    def handle_changes(self, changes):
+        """Process the detected changes and update state"""
+        if not changes:
+            return False
+
+        changed_files = {str(Path(change[1])) for change in changes}
+        self.changed_files.update(changed_files)
+        self.io.interrupt_input()
+        return True
+
+    def watch_files(self):
+        """Watch for file changes and process them"""
+        try:
+            roots_to_watch = self.get_roots_to_watch()
+
+            for changes in watch(
+                *roots_to_watch,
+                watch_filter=self.filter_func,
+                stop_event=self.stop_event,
+                ignore_permission_denied=True,
+            ):
+                if self.handle_changes(changes):
+                    return
+
+        except Exception as e:
+            if self.verbose:
+                dump(f"File watcher error: {e}")
+            raise e
+
     def start(self):
         """Start watching for file changes"""
         self.stop_event = threading.Event()
         self.changed_files = set()
 
-        def watch_files():
-            try:
-                for changes in watch(
-                    str(self.root), watch_filter=self.filter_func, stop_event=self.stop_event
-                ):
-                    if not changes:
-                        continue
-                    changed_files = {str(Path(change[1])) for change in changes}
-                    self.changed_files.update(changed_files)
-                    self.io.interrupt_input()
-                    return
-            except Exception as e:
-                if self.verbose:
-                    dump(f"File watcher error: {e}")
-                raise e
-
-        self.watcher_thread = threading.Thread(target=watch_files, daemon=True)
+        self.watcher_thread = threading.Thread(target=self.watch_files, daemon=True)
         self.watcher_thread.start()
 
     def stop(self):
@@ -233,7 +262,7 @@ class FileWatcher:
                     line_nums.append(i)
                     comments.append(comment)
                     comment = comment.lower()
-                    comment = comment.lstrip("/#-")
+                    comment = comment.lstrip("/#-;")  # Added semicolon for Lisp comments
                     comment = comment.strip()
                     if comment.startswith("ai!") or comment.endswith("ai!"):
                         has_action = "!"

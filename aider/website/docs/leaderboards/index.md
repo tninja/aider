@@ -19,16 +19,9 @@ While [aider can connect to almost any LLM](/docs/llms.html),
 it works best with models that score well on the benchmarks.
 
 
-{: .note :}
-The
-[original aider code editing leaderboard](edit.html)
-has been replaced by this 
-new, much more challenging
-[polyglot leaderboard](https://aider.chat/2024/12/21/polyglot.html).
-
 ## Polyglot leaderboard
 
-[Aider's polyglot benchmark](/docs/benchmarks.html#the-benchmark) 
+[Aider's polyglot benchmark](https://aider.chat/2024/12/21/polyglot.html#the-polyglot-benchmark) 
 asks the LLM to edit source files to complete 225 coding exercises
 from Exercism. 
 It contains exercises in many popular programming languages:
@@ -48,10 +41,11 @@ The model also has to successfully apply all its changes to the source file with
   <thead style="background-color: #f2f2f2;">
     <tr>
       <th style="padding: 8px; text-align: left;">Model</th>
-      <th style="padding: 8px; text-align: center;">Percent completed correctly</th>
+      <th style="padding: 8px; text-align: center;">Percent correct</th>
       <th style="padding: 8px; text-align: center;">Percent using correct edit format</th>
       <th style="padding: 8px; text-align: left;">Command</th>
       <th style="padding: 8px; text-align: center;">Edit format</th>
+      <th style="padding: 8px; text-align: center;">Cost</th>
     </tr>
   </thead>
   <tbody>
@@ -63,6 +57,7 @@ The model also has to successfully apply all its changes to the source file with
         <td style="padding: 8px; text-align: center;">{{ row.percent_cases_well_formed }}%</td>
         <td style="padding: 8px;"><code>{{ row.command }}</code></td>
         <td style="padding: 8px; text-align: center;">{{ row.edit_format }}</td>
+        <td style="padding: 8px; text-align: center;">{% if row.total_cost == 0 %}?{% else %}${{ row.total_cost | times: 1.0 | round: 2 }}{% endif %}</td>
       </tr>
     {% endfor %}
   </tbody>
@@ -76,7 +71,7 @@ The model also has to successfully apply all its changes to the source file with
 <script>
 {% assign data_source = edit_sorted %}
 {% assign pass_rate_field = "pass_rate_2" %}
-{% assign highlight_model = "xxxxxxxxxxx" %}
+{% assign highlight_model = "xxxxxx" %}
 {% include leaderboard.js %}
 </script>
 <style>
@@ -92,6 +87,14 @@ The model also has to successfully apply all its changes to the source file with
   }
   td:nth-child(3), td:nth-child(4) {
     font-size: 12px;
+  }
+  
+  /* Hide command and edit format columns on mobile */
+  @media screen and (max-width: 767px) {
+    th:nth-child(4), td:nth-child(4), /* Command column */
+    th:nth-child(5), td:nth-child(5) { /* Edit format column */
+      display: none;
+    }
   }
 </style>
 
@@ -121,6 +124,6 @@ mod_dates = [get_last_modified_date(file) for file in files]
 latest_mod_date = max(mod_dates)
 cog.out(f"{latest_mod_date.strftime('%B %d, %Y.')}")
 ]]]-->
-January 20, 2025.
+April 04, 2025.
 <!--[[[end]]]-->
 </p>

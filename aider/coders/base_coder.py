@@ -27,10 +27,16 @@ from aider.history import ChatSummary
 from aider.io import ConfirmGroup, InputOutput
 from aider.linter import Linter
 from aider.llm import litellm
+from aider.models import RETRY_TIMEOUT
+from aider.reasoning_tags import (
+    REASONING_TAG,
+    format_reasoning_content,
+    remove_reasoning_content,
+    replace_reasoning_tags,
+)
 from aider.repo import ANY_GIT_ERROR, GitRepo
 from aider.repomap import RepoMap
 from aider.run_cmd import run_cmd
-from aider.sendchat import RETRY_TIMEOUT, send_completion
 from aider.utils import format_content, format_messages, format_tokens, is_image_file
 
 from ..dump import dump  # noqa: F401
@@ -60,7 +66,7 @@ def wrap_fence(name):
 
 all_fences = [
     ("`" * 3, "`" * 3),
-    ("`" * 4, "`" * 4),
+    ("`" * 4, "`" * 4),  # LLMs ignore and revert to triple-backtick, causing #2879
     wrap_fence("source"),
     wrap_fence("code"),
     wrap_fence("pre"),
@@ -85,7 +91,7 @@ class Coder:
     max_reflections = 3
     edit_format = None
     yield_stream = False
-    temperature = 0
+    temperature = None
     auto_lint = True
     auto_test = False
     test_cmd = None
@@ -144,7 +150,13 @@ class Coder:
             # the system prompt.
             done_messages = from_coder.done_messages
             if edit_format != from_coder.edit_format and done_messages and summarize_from_coder:
-                done_messages = from_coder.summarizer.summarize_all(done_messages)
+                try:
+                    done_messages = from_coder.summarizer.summarize_all(done_messages)
+                except ValueError:
+                    # If summarization fails, keep the original messages and warn the user
+                    io.tool_warning(
+                        "Chat history summarization failed, continuing with full history"
+                    )
 
             # Bring along context from the old Coder
             update = dict(
@@ -162,6 +174,7 @@ class Coder:
             use_kwargs.update(kwargs)  # override passed kwargs
 
             kwargs = use_kwargs
+            from_coder.ok_to_warm_cache = False
 
         for coder in coders.__all__:
             if hasattr(coder, "edit_format") and coder.edit_format == edit_format:
@@ -194,10 +207,22 @@ class Coder:
             prefix = "Model"
 
         output = f"{prefix}: {main_model.name} with {self.edit_format} edit format"
+
+        # Check for thinking token budget
+        thinking_tokens = main_model.get_thinking_tokens()
+        if thinking_tokens:
+            output += f", {thinking_tokens} think tokens"
+
+        # Check for reasoning effort
+        reasoning_effort = main_model.get_reasoning_effort()
+        if reasoning_effort:
+            output += f", reasoning {reasoning_effort}"
+
         if self.add_cache_headers or main_model.caches_by_default:
             output += ", prompt cache"
         if main_model.info.get("supports_assistant_prefill"):
             output += ", infinite output"
+
         lines.append(output)
 
         if self.edit_format == "architect":
@@ -258,6 +283,8 @@ class Coder:
 
         return lines
 
+    ok_to_warm_cache = False
+
     def __init__(
         self,
         main_model,
@@ -295,6 +322,7 @@ class Coder:
         ignore_mentions=None,
         file_watcher=None,
         auto_copy_context=False,
+        auto_accept_architect=True,
     ):
         # Fill in a dummy Analytics if needed, but it is never .enable()'d
         self.analytics = analytics if analytics is not None else Analytics()
@@ -307,6 +335,7 @@ class Coder:
         self.abs_root_path_cache = {}
 
         self.auto_copy_context = auto_copy_context
+        self.auto_accept_architect = auto_accept_architect
 
         self.ignore_mentions = ignore_mentions
         if not self.ignore_mentions:
@@ -366,6 +395,10 @@ class Coder:
         self.pretty = self.io.pretty
 
         self.main_model = main_model
+        # Set the reasoning tag name based on model settings or default
+        self.reasoning_tag_name = (
+            self.main_model.reasoning_tag if self.main_model.reasoning_tag else REASONING_TAG
+        )
 
         self.stream = stream and main_model.streaming
 
@@ -889,7 +922,8 @@ class Coder:
         else:
             self.io.tool_error(text)
 
-        url_pattern = re.compile(r"(https?://[^\s/$.?#].[^\s]*)")
+        # Exclude double quotes from the matched URL characters
+        url_pattern = re.compile(r'(https?://[^\s/$.?#].[^\s"]*)')
         urls = list(set(url_pattern.findall(text)))  # Use set to remove duplicates
         for url in urls:
             url = url.rstrip(".',\"")
@@ -901,7 +935,8 @@ class Coder:
         if not self.detect_urls:
             return inp
 
-        url_pattern = re.compile(r"(https?://[^\s/$.?#].[^\s]*[^\s,.])")
+        # Exclude double quotes from the matched URL characters
+        url_pattern = re.compile(r'(https?://[^\s/$.?#].[^\s"]*[^\s,.])')
         urls = list(set(url_pattern.findall(inp)))  # Use set to remove duplicates
         group = ConfirmGroup(urls)
         for url in urls:
@@ -997,7 +1032,13 @@ class Coder:
         return None
 
     def get_platform_info(self):
-        platform_text = f"- Platform: {platform.platform()}\n"
+        platform_text = ""
+        try:
+            platform_text = f"- Platform: {platform.platform()}\n"
+        except KeyError:
+            # Skip platform info if it can't be retrieved
+            platform_text = "- Platform information unavailable\n"
+
         shell_var = "COMSPEC" if os.name == "nt" else "SHELL"
         shell_val = os.getenv(shell_var)
         platform_text += f"- Shell: {shell_var}={shell_val}\n"
@@ -1038,7 +1079,13 @@ class Coder:
         return platform_text
 
     def fmt_system_prompt(self, prompt):
-        lazy_prompt = self.gpt_prompts.lazy_prompt if self.main_model.lazy else ""
+        if self.main_model.lazy:
+            lazy_prompt = self.gpt_prompts.lazy_prompt
+        elif self.main_model.overeager:
+            lazy_prompt = self.gpt_prompts.overeager_prompt
+        else:
+            lazy_prompt = ""
+
         platform_text = self.get_platform_info()
 
         if self.suggest_shell_commands:
@@ -1055,14 +1102,26 @@ class Coder:
         else:
             language = "the same language they are using"
 
+        if self.fence[0] == "`" * 4:
+            quad_backtick_reminder = (
+                "\nIMPORTANT: Use *quadruple* backticks ```` as fences, not triple backticks!\n"
+            )
+        else:
+            quad_backtick_reminder = ""
+
         prompt = prompt.format(
             fence=self.fence,
+            quad_backtick_reminder=quad_backtick_reminder,
             lazy_prompt=lazy_prompt,
             platform=platform_text,
             shell_cmd_prompt=shell_cmd_prompt,
             shell_cmd_reminder=shell_cmd_reminder,
             language=language,
         )
+
+        if self.main_model.system_prompt_prefix:
+            prompt = self.main_model.system_prompt_prefix + prompt
+
         return prompt
 
     def format_chat_chunks(self):
@@ -1182,8 +1241,11 @@ class Coder:
             return
         if not self.num_cache_warming_pings:
             return
+        if not self.ok_to_warm_cache:
+            return
 
         delay = 5 * 60 - 5
+        delay = float(os.environ.get("AIDER_CACHE_KEEPALIVE_DELAY", delay))
         self.next_cache_warm = time.time() + delay
         self.warming_pings_left = self.num_cache_warming_pings
         self.cache_warming_chunks = chunks
@@ -1192,7 +1254,7 @@ class Coder:
             return
 
         def warm_cache_worker():
-            while True:
+            while self.ok_to_warm_cache:
                 time.sleep(1)
                 if self.warming_pings_left <= 0:
                     continue
@@ -1230,8 +1292,34 @@ class Coder:
 
         return chunks
 
+    def check_tokens(self, messages):
+        """Check if the messages will fit within the model's token limits."""
+        input_tokens = self.main_model.token_count(messages)
+        max_input_tokens = self.main_model.info.get("max_input_tokens") or 0
+
+        if max_input_tokens and input_tokens >= max_input_tokens:
+            self.io.tool_error(
+                f"Your estimated chat context of {input_tokens:,} tokens exceeds the"
+                f" {max_input_tokens:,} token limit for {self.main_model.name}!"
+            )
+            self.io.tool_output("To reduce the chat context:")
+            self.io.tool_output("- Use /drop to remove unneeded files from the chat")
+            self.io.tool_output("- Use /clear to clear the chat history")
+            self.io.tool_output("- Break your code into smaller files")
+            self.io.tool_output(
+                "It's probably safe to try and send the request, most providers won't charge if"
+                " the context limit is exceeded."
+            )
+
+            if not self.io.confirm_ask("Try to proceed anyway?"):
+                return False
+        return True
+
     def send_message(self, inp):
         self.event("message_send_starting")
+
+        # Notify IO that LLM processing is starting
+        self.io.llm_started()
 
         self.cur_messages += [
             dict(role="user", content=inp),
@@ -1239,6 +1327,8 @@ class Coder:
 
         chunks = self.format_messages()
         messages = chunks.all_messages()
+        if not self.check_tokens(messages):
+            return
         self.warm_cache(chunks)
 
         if self.verbose:
@@ -1299,7 +1389,7 @@ class Coder:
                         exhausted = True
                         break
 
-                    self.multi_response_content = self.get_multi_response_content()
+                    self.multi_response_content = self.get_multi_response_content_in_progress()
 
                     if messages[-1]["role"] == "assistant":
                         messages[-1]["content"] = self.multi_response_content
@@ -1319,8 +1409,14 @@ class Coder:
                 self.live_incremental_response(True)
                 self.mdstream = None
 
-            self.partial_response_content = self.get_multi_response_content(True)
+            self.partial_response_content = self.get_multi_response_content_in_progress(True)
+            self.remove_reasoning_content()
             self.multi_response_content = ""
+
+        ###
+        # print()
+        # print("=" * 20)
+        # dump(self.partial_response_content)
 
         self.io.tool_output()
 
@@ -1362,14 +1458,18 @@ class Coder:
                 return
 
             try:
-                self.reply_completed()
+                if self.reply_completed():
+                    return
             except KeyboardInterrupt:
                 interrupted = True
 
         if interrupted:
+            if self.cur_messages and self.cur_messages[-1]["role"] == "user":
+                self.cur_messages[-1]["content"] += "\n^C KeyboardInterrupt"
+            else:
+                self.cur_messages += [dict(role="user", content="^C KeyboardInterrupt")]
             self.cur_messages += [
-                dict(role="user", content="^C KeyboardInterrupt"),
-                dict(role="assistant", content="I see that you interrupted my previous reply."),
+                dict(role="assistant", content="I see that you interrupted my previous reply.")
             ]
             return
 
@@ -1486,6 +1586,10 @@ class Coder:
 
         return res
 
+    def __del__(self):
+        """Cleanup when the Coder object is destroyed."""
+        self.ok_to_warm_cache = False
+
     def add_assistant_reply_to_cur_messages(self):
         if self.partial_response_content:
             self.cur_messages += [dict(role="assistant", content=self.partial_response_content)]
@@ -1498,22 +1602,26 @@ class Coder:
                 )
             ]
 
-    def get_file_mentions(self, content):
+    def get_file_mentions(self, content, ignore_current=False):
         words = set(word for word in content.split())
 
         # drop sentence punctuation from the end
         words = set(word.rstrip(",.!;:?") for word in words)
 
         # strip away all kinds of quotes
-        quotes = "".join(['"', "'", "`"])
+        quotes = "\"'`*_"
         words = set(word.strip(quotes) for word in words)
 
-        addable_rel_fnames = self.get_addable_relative_files()
+        if ignore_current:
+            addable_rel_fnames = self.get_all_relative_files()
+            existing_basenames = {}
+        else:
+            addable_rel_fnames = self.get_addable_relative_files()
 
-        # Get basenames of files already in chat or read-only
-        existing_basenames = {os.path.basename(f) for f in self.get_inchat_relative_files()} | {
-            os.path.basename(self.get_rel_fname(f)) for f in self.abs_read_only_fnames
-        }
+            # Get basenames of files already in chat or read-only
+            existing_basenames = {os.path.basename(f) for f in self.get_inchat_relative_files()} | {
+                os.path.basename(self.get_rel_fname(f)) for f in self.abs_read_only_fnames
+            }
 
         mentioned_rel_fnames = set()
         fname_to_rel_fnames = {}
@@ -1552,7 +1660,9 @@ class Coder:
         added_fnames = []
         group = ConfirmGroup(new_mentions)
         for rel_fname in sorted(new_mentions):
-            if self.io.confirm_ask(f"Add {rel_fname} to the chat?", group=group, allow_never=True):
+            if self.io.confirm_ask(
+                "Add file to the chat?", subject=rel_fname, group=group, allow_never=True
+            ):
                 self.add_rel_fname(rel_fname)
                 added_fnames.append(rel_fname)
             else:
@@ -1562,6 +1672,9 @@ class Coder:
             return prompts.added_files.format(fnames=", ".join(added_fnames))
 
     def send(self, messages, model=None, functions=None):
+        self.got_reasoning_content = False
+        self.ended_reasoning_content = False
+
         if not model:
             model = self.main_model
 
@@ -1570,20 +1683,13 @@ class Coder:
 
         self.io.log_llm_history("TO LLM", format_messages(messages))
 
-        if self.main_model.use_temperature:
-            temp = self.temperature
-        else:
-            temp = None
-
         completion = None
         try:
-            hash_object, completion = send_completion(
-                model.name,
+            hash_object, completion = model.send_completion(
                 messages,
                 functions,
                 self.stream,
-                temp,
-                extra_params=model.extra_params,
+                self.temperature,
             )
             self.chat_completion_call_hashes.append(hash_object.hexdigest())
 
@@ -1637,6 +1743,14 @@ class Coder:
             show_func_err = func_err
 
         try:
+            reasoning_content = completion.choices[0].message.reasoning_content
+        except AttributeError:
+            try:
+                reasoning_content = completion.choices[0].message.reasoning
+            except AttributeError:
+                reasoning_content = None
+
+        try:
             self.partial_response_content = completion.choices[0].message.content or ""
         except AttributeError as content_err:
             show_content_err = content_err
@@ -1654,6 +1768,15 @@ class Coder:
             raise Exception("No data found in LLM response!")
 
         show_resp = self.render_incremental_response(True)
+
+        if reasoning_content:
+            formatted_reasoning = format_reasoning_content(
+                reasoning_content, self.reasoning_tag_name
+            )
+            show_resp = formatted_reasoning + show_resp
+
+        show_resp = replace_reasoning_tags(show_resp, self.reasoning_tag_name)
+
         self.io.assistant_output(show_resp, pretty=self.show_pretty())
 
         if (
@@ -1663,6 +1786,8 @@ class Coder:
             raise FinishReasonLength()
 
     def show_send_output_stream(self, completion):
+        received_content = False
+
         for chunk in completion:
             if len(chunk.choices) == 0:
                 continue
@@ -1681,19 +1806,46 @@ class Coder:
                         self.partial_response_function_call[k] += v
                     else:
                         self.partial_response_function_call[k] = v
+                received_content = True
             except AttributeError:
                 pass
 
+            text = ""
+
             try:
-                text = chunk.choices[0].delta.content
-                if text:
-                    self.partial_response_content += text
+                reasoning_content = chunk.choices[0].delta.reasoning_content
             except AttributeError:
-                text = None
+                try:
+                    reasoning_content = chunk.choices[0].delta.reasoning
+                except AttributeError:
+                    reasoning_content = None
+
+            if reasoning_content:
+                if not self.got_reasoning_content:
+                    text += f"<{REASONING_TAG}>\n\n"
+                text += reasoning_content
+                self.got_reasoning_content = True
+                received_content = True
+
+            try:
+                content = chunk.choices[0].delta.content
+                if content:
+                    if self.got_reasoning_content and not self.ended_reasoning_content:
+                        text += f"\n\n</{self.reasoning_tag_name}>\n\n"
+                        self.ended_reasoning_content = True
+
+                    text += content
+                    received_content = True
+            except AttributeError:
+                pass
+
+            self.partial_response_content += text
 
             if self.show_pretty():
                 self.live_incremental_response(False)
             elif text:
+                # Apply reasoning tag formatting
+                text = replace_reasoning_tags(text, self.reasoning_tag_name)
                 try:
                     sys.stdout.write(text)
                 except UnicodeEncodeError:
@@ -1705,12 +1857,25 @@ class Coder:
                 sys.stdout.flush()
                 yield text
 
+        if not received_content:
+            self.io.tool_warning("Empty response received from LLM. Check your provider account?")
+
     def live_incremental_response(self, final):
         show_resp = self.render_incremental_response(final)
+        # Apply any reasoning tag formatting
+        show_resp = replace_reasoning_tags(show_resp, self.reasoning_tag_name)
         self.mdstream.update(show_resp, final=final)
 
     def render_incremental_response(self, final):
-        return self.get_multi_response_content()
+        return self.get_multi_response_content_in_progress()
+
+    def remove_reasoning_content(self):
+        """Remove reasoning content from the model's response."""
+
+        self.partial_response_content = remove_reasoning_content(
+            self.partial_response_content,
+            self.reasoning_tag_name,
+        )
 
     def calculate_and_show_tokens_and_cost(self, messages, completion=None):
         prompt_tokens = 0
@@ -1798,11 +1963,6 @@ class Coder:
             f" ${format_cost(self.total_cost)} session."
         )
 
-        if self.add_cache_headers and self.stream:
-            warning = " Use --no-stream for accurate caching costs."
-            self.usage_report = tokens_report + "\n" + cost_report + warning
-            return
-
         if cache_hit_tokens and cache_write_tokens:
             sep = "\n"
         else:
@@ -1833,12 +1993,13 @@ class Coder:
         self.message_tokens_sent = 0
         self.message_tokens_received = 0
 
-    def get_multi_response_content(self, final=False):
+    def get_multi_response_content_in_progress(self, final=False):
         cur = self.multi_response_content or ""
         new = self.partial_response_content or ""
 
         if new.rstrip() != new and not final:
             new = new.rstrip()
+
         return cur + new
 
     def get_rel_fname(self, fname):

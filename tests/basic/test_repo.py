@@ -106,7 +106,7 @@ class TestRepo(unittest.TestCase):
             diffs = git_repo.diff_commits(False, "HEAD~1", "HEAD")
             self.assertIn("two", diffs)
 
-    @patch("aider.repo.simple_send_with_retries")
+    @patch("aider.models.Model.simple_send_with_retries")
     def test_get_commit_message(self, mock_send):
         mock_send.side_effect = ["", "a good commit message"]
 
@@ -125,17 +125,12 @@ class TestRepo(unittest.TestCase):
         # Check that simple_send_with_retries was called twice
         self.assertEqual(mock_send.call_count, 2)
 
-        # Check that it was called with the correct models
-        self.assertEqual(mock_send.call_args_list[0][0][0], model1)
-        self.assertEqual(mock_send.call_args_list[1][0][0], model2)
+        # Check that both calls were made with the same messages
+        first_call_messages = mock_send.call_args_list[0][0][0]  # Get messages from first call
+        second_call_messages = mock_send.call_args_list[1][0][0]  # Get messages from second call
+        self.assertEqual(first_call_messages, second_call_messages)
 
-        # Check that the content of the messages is the same for both calls
-        self.assertEqual(mock_send.call_args_list[0][0][1], mock_send.call_args_list[1][0][1])
-
-        # Optionally, you can still dump the call args if needed for debugging
-        dump(mock_send.call_args_list)
-
-    @patch("aider.repo.simple_send_with_retries")
+    @patch("aider.models.Model.simple_send_with_retries")
     def test_get_commit_message_strip_quotes(self, mock_send):
         mock_send.return_value = '"a good commit message"'
 
@@ -146,7 +141,7 @@ class TestRepo(unittest.TestCase):
         # Assert that the returned message is the expected one
         self.assertEqual(result, "a good commit message")
 
-    @patch("aider.repo.simple_send_with_retries")
+    @patch("aider.models.Model.simple_send_with_retries")
     def test_get_commit_message_no_strip_unmatched_quotes(self, mock_send):
         mock_send.return_value = 'a good "commit message"'
 
@@ -157,7 +152,7 @@ class TestRepo(unittest.TestCase):
         # Assert that the returned message is the expected one
         self.assertEqual(result, 'a good "commit message"')
 
-    @patch("aider.repo.simple_send_with_retries")
+    @patch("aider.models.Model.simple_send_with_retries")
     def test_get_commit_message_with_custom_prompt(self, mock_send):
         mock_send.return_value = "Custom commit message"
         custom_prompt = "Generate a commit message in the style of Shakespeare"
@@ -167,8 +162,8 @@ class TestRepo(unittest.TestCase):
 
         self.assertEqual(result, "Custom commit message")
         mock_send.assert_called_once()
-        args, _ = mock_send.call_args
-        self.assertEqual(args[1][0]["content"], custom_prompt)
+        args = mock_send.call_args[0]  # Get positional args
+        self.assertEqual(args[0][0]["content"], custom_prompt)  # Check first message content
 
     @patch("aider.repo.GitRepo.get_commit_message")
     def test_commit_with_custom_committer_name(self, mock_send):
@@ -393,7 +388,7 @@ class TestRepo(unittest.TestCase):
             self.assertNotIn(str(root_file), tracked_files)
             self.assertNotIn(str(another_subdir_file), tracked_files)
 
-    @patch("aider.repo.simple_send_with_retries")
+    @patch("aider.models.Model.simple_send_with_retries")
     def test_noop_commit(self, mock_send):
         mock_send.return_value = '"a good commit message"'
 
@@ -410,3 +405,51 @@ class TestRepo(unittest.TestCase):
             git_repo = GitRepo(InputOutput(), None, None)
 
             git_repo.commit(fnames=[str(fname)])
+
+    def test_git_commit_verify(self):
+        """Test that git_commit_verify controls whether --no-verify is passed to git commit"""
+        # Skip on Windows as hook execution works differently
+        if platform.system() == "Windows":
+            return
+
+        with GitTemporaryDirectory():
+            # Create a new repo
+            raw_repo = git.Repo()
+
+            # Create a file to commit
+            fname = Path("test_file.txt")
+            fname.write_text("initial content")
+            raw_repo.git.add(str(fname))
+
+            # Do the initial commit
+            raw_repo.git.commit("-m", "Initial commit")
+
+            # Now create a pre-commit hook that always fails
+            hooks_dir = Path(raw_repo.git_dir) / "hooks"
+            hooks_dir.mkdir(exist_ok=True)
+
+            pre_commit_hook = hooks_dir / "pre-commit"
+            pre_commit_hook.write_text("#!/bin/sh\nexit 1\n")  # Always fail
+            pre_commit_hook.chmod(0o755)  # Make executable
+
+            # Modify the file
+            fname.write_text("modified content")
+
+            # Create GitRepo with verify=True (default)
+            io = InputOutput()
+            git_repo_verify = GitRepo(io, None, None, git_commit_verify=True)
+
+            # Attempt to commit - should fail due to pre-commit hook
+            commit_result = git_repo_verify.commit(fnames=[str(fname)], message="Should fail")
+            self.assertIsNone(commit_result)
+
+            # Create GitRepo with verify=False
+            git_repo_no_verify = GitRepo(io, None, None, git_commit_verify=False)
+
+            # Attempt to commit - should succeed by bypassing the hook
+            commit_result = git_repo_no_verify.commit(fnames=[str(fname)], message="Should succeed")
+            self.assertIsNotNone(commit_result)
+
+            # Verify the commit was actually made
+            latest_commit_msg = raw_repo.head.commit.message
+            self.assertEqual(latest_commit_msg.strip(), "Should succeed")

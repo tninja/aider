@@ -9,6 +9,7 @@ try:
         git.exc.ODBError,
         git.exc.GitError,
         git.exc.InvalidGitRepositoryError,
+        git.exc.GitCommandNotFound,
     ]
 except ImportError:
     git = None
@@ -17,7 +18,6 @@ except ImportError:
 import pathspec
 
 from aider import prompts, utils
-from aider.sendchat import simple_send_with_retries
 
 from .dump import dump  # noqa: F401
 
@@ -29,6 +29,7 @@ ANY_GIT_ERROR += [
     ValueError,
     AttributeError,
     AssertionError,
+    TimeoutError,
 ]
 ANY_GIT_ERROR = tuple(ANY_GIT_ERROR)
 
@@ -56,6 +57,7 @@ class GitRepo:
         attribute_commit_message_committer=False,
         commit_prompt=None,
         subtree_only=False,
+        git_commit_verify=True,
     ):
         self.io = io
         self.models = models
@@ -69,6 +71,7 @@ class GitRepo:
         self.attribute_commit_message_committer = attribute_commit_message_committer
         self.commit_prompt = commit_prompt
         self.subtree_only = subtree_only
+        self.git_commit_verify = git_commit_verify
         self.ignore_file_cache = {}
 
         if git_dname:
@@ -133,7 +136,9 @@ class GitRepo:
         # if context:
         #    full_commit_message += "\n\n# Aider chat conversation:\n\n" + context
 
-        cmd = ["-m", full_commit_message, "--no-verify"]
+        cmd = ["-m", full_commit_message]
+        if not self.git_commit_verify:
+            cmd.append("--no-verify")
         if fnames:
             fnames = [str(self.abs_root_path(fn)) for fn in fnames]
             for fname in fnames:
@@ -145,7 +150,7 @@ class GitRepo:
         else:
             cmd += ["-a"]
 
-        original_user_name = self.repo.config_reader().get_value("user", "name")
+        original_user_name = self.repo.git.config("--get", "user.name")
         original_committer_name_env = os.environ.get("GIT_COMMITTER_NAME")
         committer_name = f"{original_user_name} (aider)"
 
@@ -153,7 +158,7 @@ class GitRepo:
             os.environ["GIT_COMMITTER_NAME"] = committer_name
 
         if aider_edits and self.attribute_author:
-            original_auther_name_env = os.environ.get("GIT_AUTHOR_NAME")
+            original_author_name_env = os.environ.get("GIT_AUTHOR_NAME")
             os.environ["GIT_AUTHOR_NAME"] = committer_name
 
         try:
@@ -173,8 +178,8 @@ class GitRepo:
                     del os.environ["GIT_COMMITTER_NAME"]
 
             if aider_edits and self.attribute_author:
-                if original_auther_name_env is not None:
-                    os.environ["GIT_AUTHOR_NAME"] = original_auther_name_env
+                if original_author_name_env is not None:
+                    os.environ["GIT_AUTHOR_NAME"] = original_author_name_env
                 else:
                     del os.environ["GIT_AUTHOR_NAME"]
 
@@ -204,7 +209,7 @@ class GitRepo:
             max_tokens = model.info.get("max_input_tokens") or 0
             if max_tokens and num_tokens > max_tokens:
                 continue
-            commit_message = simple_send_with_retries(model, messages)
+            commit_message = model.simple_send_with_retries(messages)
             if commit_message:
                 break
 
@@ -289,13 +294,19 @@ class GitRepo:
             else:
                 try:
                     iterator = commit.tree.traverse()
+                    blob = None  # Initialize blob
                     while True:
                         try:
                             blob = next(iterator)
                             if blob.type == "blob":  # blob is a file
                                 files.add(blob.path)
                         except IndexError:
-                            self.io.tool_warning(f"GitRepo: read error skipping {blob.path}")
+                            # Handle potential index error during tree traversal
+                            # without relying on potentially unassigned 'blob'
+                            self.io.tool_warning(
+                                "GitRepo: Index error encountered while reading git tree object."
+                                " Skipping."
+                            )
                             continue
                         except StopIteration:
                             break
@@ -309,8 +320,11 @@ class GitRepo:
 
         # Add staged files
         index = self.repo.index
-        staged_files = [path for path, _ in index.entries.keys()]
-        files.update(self.normalize_path(path) for path in staged_files)
+        try:
+            staged_files = [path for path, _ in index.entries.keys()]
+            files.update(self.normalize_path(path) for path in staged_files)
+        except ANY_GIT_ERROR as err:
+            self.io.tool_error(f"Unable to read staged files: {err}")
 
         res = [fname for fname in files if not self.ignored_file(fname)]
 
