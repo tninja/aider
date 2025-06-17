@@ -143,7 +143,7 @@ def get_parser(default_config_files, git_root):
     group.add_argument(
         "--thinking-tokens",
         type=str,
-        help="Set the thinking token budget for models that support it (default: not set)",
+        help="Set the thinking token budget for models that support it. Use 0 to disable. (default: not set)",
     )
     group.add_argument(
         "--verify-ssl",
@@ -409,6 +409,12 @@ def get_parser(default_config_files, git_root):
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Enable/disable adding .aider* to .gitignore (default: True)",
+    )
+    group.add_argument(
+        "--add-gitignore-files",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable/disable the addition of files listed in .gitignore to Aider's editing scope.",
     )
     default_aiderignore_file = (
         os.path.join(git_root, ".aiderignore") if git_root else ".aiderignore"
@@ -730,6 +736,12 @@ def get_parser(default_config_files, git_root):
         metavar="CHAT_LANGUAGE",
         default=None,
         help="Specify the language to use in the chat (default: None, uses system settings)",
+    )
+    group.add_argument(
+        "--commit-language",
+        metavar="COMMIT_LANGUAGE",
+        default=None,
+        help="Specify the language to use in the commit message (default: None, user language)",
     )
     group.add_argument(
         "--yes-always",
