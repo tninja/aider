@@ -906,45 +906,95 @@ class Commands:
 
         filenames = parse_quoted_filenames(args)
         for word in filenames:
-            # Expand tilde in the path
-            expanded_word = os.path.expanduser(word)
+            self.drop_file(word)
 
-            # Handle read-only files with substring matching and samefile check
-            read_only_matched = []
-            for f in self.coder.abs_read_only_fnames:
-                if expanded_word in f:
-                    read_only_matched.append(f)
-                    continue
+    def drop_file(self, word):
+        expanded_word = os.path.expanduser(word)
+        abs_path = self.coder.abs_root_path(expanded_word)
 
-                # Try samefile comparison for relative paths
-                try:
-                    abs_word = os.path.abspath(expanded_word)
-                    if os.path.samefile(abs_word, f):
-                        read_only_matched.append(f)
-                except (FileNotFoundError, OSError):
-                    continue
+        if os.path.isdir(abs_path):
+            self.drop_directory(abs_path)
+            return
 
-            for matched_file in read_only_matched:
-                self.coder.abs_read_only_fnames.remove(matched_file)
-                self.io.tool_output(f"Removed read-only file {matched_file} from the chat")
+        # Direct match
+        if abs_path in self.coder.abs_fnames:
+            self.coder.abs_fnames.remove(abs_path)
+            self.io.tool_output(f"Removed {self.coder.get_rel_fname(abs_path)} from the chat")
+            return
+        if abs_path in self.coder.abs_read_only_fnames:
+            self.coder.abs_read_only_fnames.remove(abs_path)
+            self.io.tool_output(
+                f"Removed read-only file {self.coder.get_rel_fname(abs_path)} from the chat"
+            )
+            return
 
-            # For editable files, use glob if word contains glob chars, otherwise use substring
-            if any(c in expanded_word for c in "*?[]"):
-                matched_files = self.glob_filtered_to_repo(expanded_word)
-            else:
-                # Use substring matching like we do for read-only files
-                matched_files = [
-                    self.coder.get_rel_fname(f) for f in self.coder.abs_fnames if expanded_word in f
-                ]
+        # Glob match
+        if any(c in expanded_word for c in "*?[]"):
+            matched_files = self.glob_filtered_to_repo(expanded_word)
+            if matched_files:
+                for f_rel in matched_files:
+                    f_abs = self.coder.abs_root_path(f_rel)
+                    if f_abs in self.coder.abs_fnames:
+                        self.coder.abs_fnames.remove(f_abs)
+                        self.io.tool_output(f"Removed {f_rel} from the chat")
+                    elif f_abs in self.coder.abs_read_only_fnames:
+                        self.coder.abs_read_only_fnames.remove(f_abs)
+                        self.io.tool_output(f"Removed read-only file {f_rel} from the chat")
+                return
 
-            if not matched_files:
-                matched_files.append(expanded_word)
+        # Path component matching
+        matched_abs_fnames = []
+        try:
+            word_parts = Path(expanded_word).parts
+        except ValueError:
+            self.io.tool_error(f"Invalid path: {word}")
+            return
 
-            for matched_file in matched_files:
-                abs_fname = self.coder.abs_root_path(matched_file)
-                if abs_fname in self.coder.abs_fnames:
-                    self.coder.abs_fnames.remove(abs_fname)
-                    self.io.tool_output(f"Removed {matched_file} from the chat")
+        all_files = list(self.coder.abs_fnames) + list(self.coder.abs_read_only_fnames)
+        for f_abs in all_files:
+            f_parts = Path(f_abs).parts
+            if len(f_parts) >= len(word_parts) and f_parts[-len(word_parts) :] == word_parts:
+                if f_abs not in matched_abs_fnames:
+                    matched_abs_fnames.append(f_abs)
+                continue
+
+            try:
+                abs_word = self.coder.abs_root_path(expanded_word)
+                if os.path.samefile(abs_word, f_abs):
+                    if f_abs not in matched_abs_fnames:
+                        matched_abs_fnames.append(f_abs)
+            except (FileNotFoundError, OSError):
+                continue
+
+        if not matched_abs_fnames:
+            self.io.tool_error(f"No file matching '{word}' found in chat.")
+            return
+
+        for f_abs in matched_abs_fnames:
+            f_rel = self.coder.get_rel_fname(f_abs)
+            if f_abs in self.coder.abs_fnames:
+                self.coder.abs_fnames.remove(f_abs)
+                self.io.tool_output(f"Removed {f_rel} from the chat")
+            elif f_abs in self.coder.abs_read_only_fnames:
+                self.coder.abs_read_only_fnames.remove(f_abs)
+                self.io.tool_output(f"Removed read-only file {f_rel} from the chat")
+
+    def drop_directory(self, dir_path):
+        dropped_files = []
+        for fname in list(self.coder.abs_fnames):
+            if Path(fname).is_relative_to(dir_path):
+                self.coder.abs_fnames.remove(fname)
+                dropped_files.append(self.coder.get_rel_fname(fname))
+        for fname in list(self.coder.abs_read_only_fnames):
+            if Path(fname).is_relative_to(dir_path):
+                self.coder.abs_read_only_fnames.remove(fname)
+                dropped_files.append(self.coder.get_rel_fname(fname))
+
+        if dropped_files:
+            for file in dropped_files:
+                self.io.tool_output(f"Removed {file} from the chat")
+        else:
+            self.io.tool_error(f"No files from '{dir_path}' found in chat.")
 
     def cmd_git(self, args):
         "Run a git command (output excluded from chat)"
