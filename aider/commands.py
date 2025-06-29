@@ -906,13 +906,15 @@ class Commands:
 
         filenames = parse_quoted_filenames(args)
         for word in filenames:
+            # Normalize path separators
+            word = word.replace("\\", os.path.sep).replace("/", os.path.sep)
             # Expand tilde in the path
             expanded_word = os.path.expanduser(word)
 
-            # Handle read-only files with substring matching and samefile check
+            # Handle read-only files with path suffix matching and samefile check
             read_only_matched = []
             for f in self.coder.abs_read_only_fnames:
-                if expanded_word in f:
+                if (os.path.sep + f).endswith(os.path.sep + expanded_word):
                     read_only_matched.append(f)
                     continue
 
@@ -928,13 +930,15 @@ class Commands:
                 self.coder.abs_read_only_fnames.remove(matched_file)
                 self.io.tool_output(f"Removed read-only file {matched_file} from the chat")
 
-            # For editable files, use glob if word contains glob chars, otherwise use substring
+            # For editable files, use glob if word contains glob chars, otherwise use path suffix
             if any(c in expanded_word for c in "*?[]"):
                 matched_files = self.glob_filtered_to_repo(expanded_word)
             else:
-                # Use substring matching like we do for read-only files
+                # Use path suffix matching like we do for read-only files
                 matched_files = [
-                    self.coder.get_rel_fname(f) for f in self.coder.abs_fnames if expanded_word in f
+                    self.coder.get_rel_fname(f)
+                    for f in self.coder.abs_fnames
+                    if (os.path.sep + f).endswith(os.path.sep + expanded_word)
                 ]
 
             if not matched_files:
